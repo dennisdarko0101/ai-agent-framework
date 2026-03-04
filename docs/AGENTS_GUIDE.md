@@ -1,8 +1,191 @@
 # Agents Guide
 
-## Memory System Overview
+## Agent System
 
-The framework provides pluggable memory backends that control how much conversation history an agent retains and how it retrieves relevant past context.
+The framework provides a ReAct-based agent architecture with specialised variants and multi-agent orchestration — all built from primitives, no LangChain dependency.
+
+### Core Concepts
+
+| Concept | Description |
+|---------|-------------|
+| `BaseAgent` | Abstract class — implement `run(task) -> AgentResponse` |
+| `ReActAgent` | Reason → Act → Observe loop with native tool calling |
+| `AgentResponse` | Final output with steps, tokens, timing, metadata |
+| `AgentStep` | One think → act → observe cycle |
+| `AgentAction` | A single tool invocation within a step |
+
+### ReActAgent
+
+The core agent follows the **ReAct** pattern (Reasoning + Acting):
+
+1. Receive a task
+2. Load memory context and tool schemas
+3. Send to LLM → LLM either returns text (final answer) or tool calls
+4. Execute tool calls, feed results back to LLM
+5. Repeat until final answer or max_steps
+
+```python
+from src.agents.react import ReActAgent
+from src.llm.provider import ProviderFactory
+from src.tools.registry import ToolRegistry
+
+llm = ProviderFactory.create()
+tools = ToolRegistry.get_instance()
+agent = ReActAgent(llm=llm, tools=tools, max_steps=10)
+
+result = await agent.run("What is 2 + 2?")
+print(result.output)       # "4"
+print(result.total_tokens)  # token count
+print(len(result.steps))    # reasoning steps taken
+```
+
+#### Constructor Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `llm` | required | `BaseLLMProvider` instance |
+| `tools` | `None` | `ToolRegistry` with registered tools |
+| `memory` | `None` | `BaseMemory` for conversation history |
+| `system_prompt` | ReAct default | Custom system prompt |
+| `max_steps` | 10 | Safety cap on reasoning iterations |
+| `name` | `"react"` | Agent name for logging |
+| `temperature` | 0.7 | LLM temperature |
+| `max_tokens` | 4096 | Max tokens per LLM response |
+
+### Specialised Agents
+
+All specialised agents extend `ReActAgent` with domain-specific system prompts and convenience methods.
+
+#### PlannerAgent
+
+Decomposes complex tasks into structured sub-task plans.
+
+```python
+from src.agents.planner import PlannerAgent
+
+planner = PlannerAgent(llm=llm, tools=tools)
+plan = await planner.create_plan("Build a REST API with authentication")
+```
+
+#### ResearchAgent
+
+Focused on information gathering using search and extraction tools.
+
+```python
+from src.agents.researcher import ResearchAgent
+
+researcher = ResearchAgent(llm=llm, tools=tools)
+findings = await researcher.research("quantum computing", depth="deep")
+```
+
+#### CoderAgent
+
+Writes, debugs, and verifies code.
+
+```python
+from src.agents.coder import CoderAgent
+
+coder = CoderAgent(llm=llm, tools=tools)
+code = await coder.write_code("A binary search function", language="python")
+fix = await coder.debug_code("def f(): retrun 1", "SyntaxError: invalid syntax")
+```
+
+#### ReviewerAgent
+
+Reviews and critiques content or agent outputs.
+
+```python
+from src.agents.reviewer import ReviewerAgent
+
+reviewer = ReviewerAgent(llm=llm)
+feedback = await reviewer.review(code.output, criteria="correctness, readability")
+```
+
+### Custom Agents
+
+Extend `ReActAgent` for your own specialisation:
+
+```python
+from src.agents.react import ReActAgent
+from src.agents.base import AgentResponse
+
+class MyAgent(ReActAgent):
+    def __init__(self, llm, **kwargs):
+        super().__init__(
+            llm=llm,
+            system_prompt="You are a helpful assistant specialised in X.",
+            name="my-agent",
+            **kwargs,
+        )
+
+    async def do_task(self, task: str) -> AgentResponse:
+        return await self.run(f"Perform X on: {task}")
+```
+
+---
+
+## Orchestration Patterns
+
+Three composable patterns for multi-agent coordination.
+
+### AgentPipeline (Sequential)
+
+Chain agents — the output of stage N feeds stage N+1.
+
+```python
+from src.orchestration.pipeline import AgentPipeline
+
+pipe = AgentPipeline(agents=[planner, coder, reviewer])
+result = await pipe.run("Build a calculator")
+# planner output → coder input → reviewer input → final output
+```
+
+If any stage fails, the pipeline stops and returns the error with metadata about which stage failed.
+
+### TaskRouter (Classification)
+
+LLM classifies the task and routes it to the right agent.
+
+```python
+from src.orchestration.router import TaskRouter
+
+router = TaskRouter(
+    llm=llm,
+    routes={
+        "coding": coder,
+        "research": researcher,
+        "planning": planner,
+    },
+    default_agent=general_agent,  # fallback
+)
+result = await router.route("Write a sorting algorithm")
+print(result.metadata["routed_to"])  # "coding"
+```
+
+### AgentSupervisor (Delegation)
+
+A supervisor LLM decides which agent to invoke next, collects results, and synthesises a final answer.
+
+```python
+from src.orchestration.supervisor import AgentSupervisor
+
+supervisor = AgentSupervisor(
+    llm=llm,
+    agents={"coder": coder, "reviewer": reviewer},
+    max_rounds=5,
+)
+result = await supervisor.run("Build and review a function")
+```
+
+The supervisor uses two signals:
+- `DELEGATE <agent>: <sub-task>` — invoke an agent
+- `DONE: <answer>` — stop and return the final answer
+
+---
+
+## Memory System
+
+Pluggable memory backends that control how much conversation history an agent retains.
 
 All backends implement `BaseMemory` (async interface):
 
@@ -89,18 +272,17 @@ memory = CompositeMemory(memories=[conv_memory, vector_memory])
 
 **When to use:** When you want both a sliding window *and* semantic retrieval.
 
-## How Memory Affects Agent Behaviour
-
-- **Too little memory** — the agent forgets earlier instructions and repeats questions.
-- **Too much memory** — the context window fills up, costs increase, and irrelevant old messages dilute focus.
-- **Summary memory** strikes a balance by preserving the gist while keeping token usage stable.
-- **Vector memory** is ideal when the agent needs to recall specific facts from hundreds of messages ago.
+---
 
 ## Configuration
 
-Memory settings in `.env` or environment variables:
+Memory and agent settings in `.env` or environment variables:
 
 ```
+# Agent
+MAX_AGENT_STEPS=10               # Max reasoning steps per run
+
+# Memory
 MEMORY_TYPE=conversation          # conversation | summary | vector
 MEMORY_MAX_MESSAGES=20            # ConversationMemory buffer size
 SUMMARY_THRESHOLD=10              # messages before summary triggers

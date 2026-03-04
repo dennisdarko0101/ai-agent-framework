@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -142,6 +143,34 @@ class BaseLLMProvider(ABC):
                 raise
         raise RuntimeError(f"All {retries} retries exhausted") from last_exc
 
+    # ── Multi-turn tool-use message building ──────────────────────────
+
+    def build_assistant_message(self, response: LLMResponse) -> dict[str, Any]:
+        """Build the assistant message dict for multi-turn tool-use conversations.
+
+        Subclasses override to use their native tool-calling format.
+        """
+        return {"role": "assistant", "content": response.content}
+
+    def build_tool_result_messages(
+        self,
+        tool_calls: list[ToolCall],
+        results: list[str],
+        errors: list[bool] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build message(s) containing tool execution results.
+
+        Args:
+            tool_calls: The tool calls that were executed.
+            results: The text output from each tool call.
+            errors: Optional flags indicating which results are errors.
+        """
+        parts: list[str] = []
+        for i, (tc, result) in enumerate(zip(tool_calls, results, strict=False)):
+            prefix = "ERROR: " if (errors and errors[i]) else ""
+            parts.append(f"[{tc.tool_name}]: {prefix}{result}")
+        return [{"role": "user", "content": "\n".join(parts)}]
+
 
 # ---------------------------------------------------------------------------
 # Claude (Anthropic) provider
@@ -217,6 +246,37 @@ class ClaudeProvider(BaseLLMProvider):
             stop_reason=response.stop_reason or "",
             raw=response,
         )
+
+    def build_assistant_message(self, response: LLMResponse) -> dict[str, Any]:
+        content: list[dict[str, Any]] = []
+        if response.content:
+            content.append({"type": "text", "text": response.content})
+        for tc in response.tool_calls:
+            content.append({
+                "type": "tool_use",
+                "id": tc.call_id,
+                "name": tc.tool_name,
+                "input": tc.arguments,
+            })
+        return {"role": "assistant", "content": content}
+
+    def build_tool_result_messages(
+        self,
+        tool_calls: list[ToolCall],
+        results: list[str],
+        errors: list[bool] | None = None,
+    ) -> list[dict[str, Any]]:
+        content: list[dict[str, Any]] = []
+        for i, (tc, result) in enumerate(zip(tool_calls, results, strict=False)):
+            block: dict[str, Any] = {
+                "type": "tool_result",
+                "tool_use_id": tc.call_id,
+                "content": result,
+            }
+            if errors and errors[i]:
+                block["is_error"] = True
+            content.append(block)
+        return [{"role": "user", "content": content}]
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +363,33 @@ class OpenAIProvider(BaseLLMProvider):
             stop_reason=choice.finish_reason or "",
             raw=response,
         )
+
+    def build_assistant_message(self, response: LLMResponse) -> dict[str, Any]:
+        msg: dict[str, Any] = {"role": "assistant", "content": response.content or None}
+        if response.tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.tool_name,
+                        "arguments": json.dumps(tc.arguments),
+                    },
+                }
+                for tc in response.tool_calls
+            ]
+        return msg
+
+    def build_tool_result_messages(
+        self,
+        tool_calls: list[ToolCall],
+        results: list[str],
+        errors: list[bool] | None = None,
+    ) -> list[dict[str, Any]]:
+        return [
+            {"role": "tool", "tool_call_id": tc.call_id, "content": result}
+            for tc, result in zip(tool_calls, results, strict=False)
+        ]
 
 
 # ---------------------------------------------------------------------------

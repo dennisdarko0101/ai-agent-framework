@@ -63,6 +63,17 @@ class Settings(BaseSettings):
         description="ChromaDB persistence directory for vector memory",
     )
 
+    # Tools
+    tool_workspace_dir: str = Field(
+        default="./workspace",
+        description="Root directory for file read/write tools",
+    )
+    api_caller_timeout: int = Field(default=30, ge=1, le=120, description="HTTP request timeout (s)")
+    api_caller_allowed_domains: str = Field(
+        default="",
+        description="Comma-separated domain allowlist for API caller (empty = allow all)",
+    )
+
     # Logging
     log_level: str = Field(default="INFO", description="Log level")
     log_json: bool = Field(default=False, description="Output logs as JSON")

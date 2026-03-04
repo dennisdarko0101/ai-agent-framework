@@ -58,6 +58,18 @@ class Settings(BaseSettings):
         default=MemoryType.CONVERSATION,
         description="Memory backend type",
     )
+    memory_max_messages: int = Field(
+        default=20, ge=1, le=500,
+        description="Max messages in conversation memory buffer",
+    )
+    summary_threshold: int = Field(
+        default=10, ge=3, le=100,
+        description="Message count that triggers summarisation",
+    )
+    summary_recent_count: int = Field(
+        default=5, ge=1, le=50,
+        description="Recent messages kept after summarisation",
+    )
     chroma_persist_dir: str | None = Field(
         default=None,
         description="ChromaDB persistence directory for vector memory",

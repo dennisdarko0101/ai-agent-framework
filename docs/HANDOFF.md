@@ -1,6 +1,6 @@
 # Project Handoff — AI Agent Framework
 
-## Current Status: Phase 1, Step 2 Complete
+## Current Status: Phase 1, Step 3 Complete
 
 ### What's Done
 
@@ -21,47 +21,45 @@
 - `ToolResult` dataclass: `output`, `error`, `execution_time`, `success`
 - `ToolRegistry` with singleton, registration, lookup, schema generation, async execute
 - Auto-discovery: scan a directory for tool classes via `discover_tools()`
-- Validation: duplicate names, empty names/descriptions, type checking on register
+- Built-in tools: Calculator, FileRead/Write, CodeExecutor, WebSearch, APICaller, Summarize, Extract
 
-**Built-in Tools**
-- `CalculatorTool` — Safe AST-based math evaluation (no `eval()`), supports arithmetic, trig, sqrt, percentages, constants
-- `FileReadTool` / `FileWriteTool` — Workspace-sandboxed file I/O with path traversal protection
-- `CodeExecutorTool` — Subprocess sandbox integration with import blocking and timeout
-- `WebSearchTool` — DuckDuckGo search with rate limiting (1 req/s)
-- `APICallerTool` — Async HTTP client (httpx) with domain allowlist and timeout
-- `SummarizeTool` / `ExtractTool` — LLM-powered text processing (entities, dates, numbers, key points)
+**Phase 1, Step 3 — Memory System** (`src/memory/`)
 
-**Settings Additions**
-- `tool_workspace_dir` — Root directory for file tools
-- `api_caller_timeout` — HTTP request timeout
-- `api_caller_allowed_domains` — Domain allowlist for API caller
+- `BaseMemory` abstract class (async interface): `add`, `get_context`, `search`, `clear`, `get_stats`
+- `Message` dataclass: `role`, `content`, `metadata`, `timestamp`, `id`, `to_dict()`
+- `estimate_tokens()` utility: tiktoken when available, ~4 chars/token fallback
+- `ConversationMemory` — Sliding-window buffer with FIFO eviction, token-aware context building
+- `SummaryMemory` — Running LLM-generated summary + recent messages, auto-summarisation trigger
+- `VectorMemory` — ChromaDB-backed semantic storage/retrieval, metadata filtering, deduplication
+- `CompositeMemory` — Merges multiple backends, broadcasts adds, deduplicates by ID + content
 
-**Tests** (67 prior + 52 new = 119+ tests)
-- `test_tools.py` — 35+ tests: each tool's execute, parameter validation, error handling, workspace restriction, sandbox integration
-- `test_registry.py` — 17 tests: register, retrieve, duplicate rejection, listing, schemas, sync/async execute, singleton, discovery
+**Settings Additions (Step 3)**
+- `memory_max_messages` — ConversationMemory buffer size
+- `summary_threshold` — Message count that triggers summarisation
+- `summary_recent_count` — Recent messages kept after summarisation
+
+**Tests** (132 prior + 37 new = 169 tests)
+- `test_memory.py` — 37 tests: Message dataclass, estimate_tokens, ConversationMemory (add, get_context, FIFO, token limit, search, clear, stats), SummaryMemory (threshold trigger, context format, failure handling, mocked LLM), VectorMemory (mocked ChromaDB — add, search, metadata filter, dedup, clear, stats), CompositeMemory (broadcast, merge, dedup, search, clear, stats)
 
 **Documentation**
-- `docs/TOOLS_GUIDE.md` — How to create custom tools, built-in tools reference, schema format, auto-discovery
+- `docs/AGENTS_GUIDE.md` — Memory system overview, when to use which type, configuration
+- `docs/TOOLS_GUIDE.md` — Custom tool creation, built-in tools reference
 
-### Next Steps — Phase 1, Step 3
+### Next Steps — Phase 1, Step 4
 
 1. **Agent Core** (`src/agents/`)
    - `BaseAgent` with ReAct-style reasoning loop
    - Tool execution integration via ToolRegistry
    - Step-by-step reasoning with configurable max steps
-   - Conversation history management
-
-2. **Memory System** (`src/memory/`)
-   - Conversation memory (message history)
-   - Summary memory (LLM-compressed)
-   - Vector memory (ChromaDB embeddings)
+   - Memory integration for conversation context
 
 ### Architecture Decisions
 
 - **No LangChain** — Everything built from primitives for full control
-- **Async-first** — All LLM calls are async; sync tools called directly in async context
+- **Async-first** — All LLM and memory calls are async
 - **Provider-agnostic** — ToolSchema converts to any provider format
 - **Subprocess sandbox** — Code runs in isolated process, not in-process
-- **Static import analysis** — AST-based check before execution
 - **Composable tools** — Add a new tool by subclassing BaseTool and registering it
-- **Registry singleton** — Global registry with reset for testing
+- **Pluggable memory** — Agents work with any BaseMemory implementation
+- **Lazy chromadb import** — VectorMemory imports chromadb inside `__init__` to avoid breakage on platforms where chromadb has issues (e.g., Python 3.14 pydantic v1 conflict)
+- **Content-based dedup** — CompositeMemory deduplicates by both message ID and (role, content) to handle the case where different backends create different IDs for the same logical message

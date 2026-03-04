@@ -274,6 +274,50 @@ memory = CompositeMemory(memories=[conv_memory, vector_memory])
 
 ---
 
+## API Integration
+
+All agents are accessible via the REST API and WebSocket.
+
+### REST — Execute Any Agent
+
+```bash
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{"task": "What is 2+2?", "agent_type": "react", "max_steps": 10}'
+```
+
+Specialised endpoints:
+
+| Endpoint | Agent | Request Fields |
+|----------|-------|---------------|
+| `POST /api/v1/plan` | PlannerAgent | `task` |
+| `POST /api/v1/research` | ResearchAgent | `topic` |
+| `POST /api/v1/code` | CoderAgent | `task`, `language` |
+| `POST /api/v1/pipeline` | AgentPipeline | `task`, `stages` |
+
+### WebSocket — Real-Time Streaming
+
+Connect to `/ws/run` for live thought/action/observation events:
+
+```python
+import asyncio, json, websockets
+
+async def main():
+    async with websockets.connect("ws://localhost:8000/ws/run") as ws:
+        await ws.send(json.dumps({"task": "Explain AI", "agent_type": "react"}))
+        async for message in ws:
+            event = json.loads(message)
+            print(f"[{event['event_type']}] {event['data']}")
+            if event["event_type"] in ("result", "error"):
+                break
+
+asyncio.run(main())
+```
+
+Event types: `thought`, `action`, `observation`, `result`, `error`
+
+---
+
 ## Configuration
 
 Memory and agent settings in `.env` or environment variables:

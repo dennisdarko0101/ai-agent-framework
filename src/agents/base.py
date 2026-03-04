@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,8 +84,19 @@ class BaseAgent(ABC):
         self.name = name
 
     @abstractmethod
-    async def run(self, task: str) -> AgentResponse:
-        """Execute a task and return the response."""
+    async def run(
+        self,
+        task: str,
+        event_callback: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> AgentResponse:
+        """Execute a task and return the response.
+
+        Args:
+            task: The task description.
+            event_callback: Optional async callback for streaming events.
+                Called with ``(event_type, data)`` where *event_type* is one of
+                ``thought``, ``action``, ``observation``, ``result``, ``error``.
+        """
         ...
 
     def _build_system_prompt(self) -> str:

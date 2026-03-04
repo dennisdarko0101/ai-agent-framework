@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.agents.base import AgentAction, AgentResponse, AgentStep, BaseAgent
@@ -58,7 +59,11 @@ class ReActAgent(BaseAgent):
 
     # ── Main loop ────────────────────────────────────────────────────
 
-    async def run(self, task: str) -> AgentResponse:
+    async def run(
+        self,
+        task: str,
+        event_callback: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> AgentResponse:
         start = time.monotonic()
         steps: list[AgentStep] = []
         messages: list[dict[str, Any]] = []
@@ -97,6 +102,11 @@ class ReActAgent(BaseAgent):
                 ))
                 if self.memory and response.content:
                     await self.memory.add("assistant", response.content)
+                if event_callback:
+                    await event_callback("result", {
+                        "content": response.content,
+                        "step": step_num,
+                    })
                 return AgentResponse(
                     output=response.content,
                     steps=steps,
@@ -105,12 +115,26 @@ class ReActAgent(BaseAgent):
                     execution_time=time.monotonic() - start,
                 )
 
+            # ── Emit thought event ────────────────────────────────
+            if event_callback and response.content:
+                await event_callback("thought", {
+                    "content": response.content,
+                    "step": step_num,
+                })
+
             # ── Execute tool calls ────────────────────────────────
             actions: list[AgentAction] = []
             result_strings: list[str] = []
             error_flags: list[bool] = []
 
             for tc in response.tool_calls:
+                if event_callback:
+                    await event_callback("action", {
+                        "tool": tc.tool_name,
+                        "arguments": tc.arguments,
+                        "step": step_num,
+                    })
+
                 if self.tools:
                     result = await self.tools.execute(tc.tool_name, tc.arguments)
                     actions.append(AgentAction(
@@ -133,6 +157,15 @@ class ReActAgent(BaseAgent):
                     ))
                     result_strings.append("No tool registry configured")
                     error_flags.append(True)
+
+                if event_callback:
+                    a = actions[-1]
+                    await event_callback("observation", {
+                        "tool": a.tool_name,
+                        "result": a.result_output if a.success else a.result_error,
+                        "success": a.success,
+                        "step": step_num,
+                    })
 
             # Build observation text
             obs_parts: list[str] = []
@@ -159,6 +192,11 @@ class ReActAgent(BaseAgent):
             )
 
         # ── Max steps exhausted ───────────────────────────────────────
+        if event_callback:
+            await event_callback("error", {
+                "content": "Maximum steps reached without a final answer.",
+                "step": self.max_steps,
+            })
         return AgentResponse(
             output="Maximum steps reached without a final answer.",
             steps=steps,

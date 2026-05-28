@@ -6,7 +6,7 @@ WORKDIR /build
 COPY pyproject.toml .
 COPY src/ src/
 
-RUN pip install --no-cache-dir --prefix=/install .
+RUN pip install --no-cache-dir --timeout=300 --retries=10 --prefix=/install .
 
 # ── Runtime ──────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
